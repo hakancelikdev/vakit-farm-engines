@@ -1,0 +1,45 @@
+name: publish
+
+# Bir build koşusunun zip'lerini (yeniden derlemeden) release olarak yayınlar — zip yerel makineye hiç inmez,
+# ev bağlantısında 1,6 GB indirip geri yüklemek gerekmez. Özetler build'in kendi `.sha256` dosyaları; build provenance
+# attestation'ı aynı zip'e aittir.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "build.yml koşusunun kimliği"
+        required: true
+      tag:
+        description: "release etiketi (ör. v0.7.2-vakit.2)"
+        required: true
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          path: dist
+          merge-multiple: true
+      - name: Rename to tag + release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          cd dist
+          for zip in *-dev.zip; do
+            new="${zip%-dev.zip}-$TAG.zip"
+            mv "$zip" "$new"
+            sha256sum "$new" > "$new.sha256"
+            rm -f "$zip.sha256"
+          done
+          cat *.sha256
+          gh release create "$TAG" * -R "$GITHUB_REPOSITORY" --target main --title "$TAG" \
+            --notes "audio.cpp v0.7.2 + VoxCPM2 patch (CUDA 12.4, sm 75/86/89) + fdkaac 1.0.6 / fdk-aac 2.0.3. Build run ${{ inputs.run_id }} (build provenance attested)."

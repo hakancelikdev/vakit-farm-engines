@@ -223,6 +223,9 @@ jobs:
       - name: Smoke (no GPU on runner)
         run: |
           set -euo pipefail
+          # GPU'suz runner'da CUDA kitaplığı hiç yüklenmez: eksik bağımlılığı ldd'yle yakala (libcuda sürücüyle gelir).
+          missing="$(LD_LIBRARY_PATH="$PWD/stage" ldd stage/audiocpp_cli stage/*.so* | grep 'not found' | grep -v 'libcuda.so.1' || true)"
+          [ -z "$missing" ] || { echo "eksik kitaplık: $missing"; exit 1; }
           LD_LIBRARY_PATH="$PWD/stage" ./stage/audiocpp_cli --list-devices
           python3 -c "import wave; w = wave.open('s.wav', 'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(48000); w.writeframes(bytes(96000)); w.close()"
           ./stage/fdkaac -p 5 -b 32000 -o s.m4a s.wav && test "$(stat -c %s s.m4a)" -gt 100
