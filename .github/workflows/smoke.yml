@@ -1,6 +1,6 @@
 name: smoke
 
-# Çiftliğin Windows kurulumunu temiz bir Windows'ta uçtan uca dener (`install.ps1 -CheckOnly`): uv, Python,
+# Çiftliğin Windows ve Linux kurulumunu temiz makinede uçtan uca dener (`install.ps1 -CheckOnly`): uv, Python,
 # imzalı paket, Windows kilidiyle worker ortamı, motor zip'i (indir + özet + aç), `audiocpp_cli --list-devices`,
 # fdkaac. Kayıt yapmaz, otomatik başlatma kurmaz, iş almaz; runner'da GPU yok (hata sayılmaz).
 on:
@@ -24,3 +24,11 @@ jobs:
           [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
           $script = Invoke-RestMethod -UseBasicParsing -UserAgent 'vakit-farm/1 (ci)' https://farm-vakit.hakancelik.dev/install.ps1
           & ([scriptblock]::Create($script)) -CheckOnly
+
+  check-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: install.sh --check-only (Linux'a devreder)
+        env:
+          VAKIT_FARM_CHANNEL: ${{ inputs.channel }}
+        run: curl -fsSL -A 'vakit-farm/1 (ci)' https://farm-vakit.hakancelik.dev/install.sh | bash -s -- --check-only
