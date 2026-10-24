@@ -1,0 +1,151 @@
+name: build
+
+# audio.cpp v0.7.2 + yama (VoxCPM2, CUDA) ve fdkaac → tek zip. Yapılandırma upstream'in kendi release.yml
+# windows-cuda işinden (test edilmiş yol): doğrudan CMake, OpenMP kapalı, ggml-cuda.dll + CUDA çalışma zamanı.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  AUDIOCPP_URL: https://github.com/0xShug0/audio.cpp/archive/refs/tags/v0.7.2.tar.gz
+  AUDIOCPP_SHA256: cab8db31cec26ef8f1e39eabea1df5f02a87e8de87a5ae334b1e66217339c6bf
+  FDK_AAC_URL: https://github.com/mstorsjo/fdk-aac/archive/refs/tags/v2.0.3.tar.gz
+  FDK_AAC_SHA256: e25671cd96b10bad896aa42ab91a695a9e573395262baed4e4a2ff178d6a3a78
+  FDKAAC_URL: https://github.com/nu774/fdkaac/archive/refs/tags/v1.0.6.tar.gz
+  FDKAAC_SHA256: ed34c8dcae3d49d385e1ceaa380c5871cda744402358c61bcb49950a25bfae58
+  # Turing (RTX 20) · Ampere (RTX 30) · Ada (RTX 40); her mimari zip'i büyütür.
+  CUDA_ARCHS: "75;86;89"
+
+jobs:
+  windows-cuda:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sources (sha-verified) + patch
+        shell: pwsh
+        run: |
+          Invoke-WebRequest $env:AUDIOCPP_URL -OutFile audiocpp.tar.gz
+          if ((Get-FileHash -Algorithm SHA256 audiocpp.tar.gz).Hash.ToLower() -ne $env:AUDIOCPP_SHA256) { throw "audio.cpp sha" }
+          New-Item -ItemType Directory src | Out-Null
+          tar -xzf audiocpp.tar.gz -C src --strip-components 1
+          git -C src init -q
+          git -C src apply ..\patches\0001-voxcpm2-4gb-ve-hiz.patch
+          if ($LASTEXITCODE -ne 0) { throw "patch" }
+
+      - name: Install CUDA build tools
+        uses: Jimver/cuda-toolkit@v0.2.36
+        with:
+          cuda: "12.4.1"
+          method: local
+
+      - name: Configure + build audiocpp_cli (VoxCPM2 only)
+        shell: cmd
+        working-directory: src
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64 >nul
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release ^
+            -DENGINE_ENABLE_CUDA=ON -DENGINE_ENABLE_OPENMP=OFF -DGGML_OPENMP=OFF ^
+            -DENGINE_ENABLE_CUDA_GRAPHS=ON -DENGINE_ENABLE_VULKAN=OFF -DENGINE_ENABLE_METAL=OFF ^
+            -DENGINE_ENABLE_LLAMAFILE=ON -DENGINE_ENABLE_NATIVE_CPU=ON -DENGINE_BUILD_TESTS=OFF ^
+            -DENGINE_ENABLE_CPU_ALL_VARIANTS=ON ^
+            "-DCMAKE_CUDA_ARCHITECTURES=%CUDA_ARCHS%" ^
+            -DAUDIOCPP_MODEL_SET=custom -DAUDIOCPP_MODELS=voxcpm2 ^
+            -DAUDIOCPP_DEPLOYMENT_BUILD=ON -DCUDAToolkit_ROOT="%CUDA_PATH%"
+          if errorlevel 1 exit /b 1
+          cmake --build build --config Release -j %NUMBER_OF_PROCESSORS% --target audiocpp_cli
+          if errorlevel 1 exit /b 1
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: >-
+            mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-pkgconf
+            make autoconf automake libtool tar
+
+      - name: fdk-aac + fdkaac (static, HE-AAC)
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          prefix="$PWD/fdk-prefix"
+          curl -fsSL -o fdk-aac.tar.gz "$FDK_AAC_URL"
+          echo "$FDK_AAC_SHA256  fdk-aac.tar.gz" | sha256sum -c -
+          curl -fsSL -o fdkaac.tar.gz "$FDKAAC_URL"
+          echo "$FDKAAC_SHA256  fdkaac.tar.gz" | sha256sum -c -
+          tar -xzf fdk-aac.tar.gz && tar -xzf fdkaac.tar.gz
+          cmake -S fdk-aac-2.0.3 -B fdk-build -G "MSYS Makefiles" -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF -DBUILD_PROGRAMS=OFF -DCMAKE_INSTALL_PREFIX="$prefix"
+          cmake --build fdk-build -j "$(nproc)" --target install
+          cd fdkaac-1.0.6
+          autoreconf -fiv
+          PKG_CONFIG_PATH="$prefix/lib/pkgconfig" ./configure LDFLAGS="-static" CPPFLAGS="-I$prefix/include" \
+            LIBS="-L$prefix/lib -lstdc++"
+          make -j "$(nproc)"
+          ldd fdkaac.exe | (grep -iv "/c/windows" || true)
+          cp fdkaac.exe ../fdkaac.exe
+
+      - name: Stage zip (engine + CUDA runtime + VC runtime + fdkaac + licenses)
+        shell: pwsh
+        run: |
+          $stage = "stage"
+          New-Item -ItemType Directory -Force -Path $stage, "$stage\LICENSES" | Out-Null
+          Copy-Item src\build\bin\audiocpp_cli.exe, src\build\bin\*.dll $stage
+          $dlls = "cudart64_*.dll", "cublas64_*.dll", "cublasLt64_*.dll", "cufft64_*.dll"
+          foreach ($dir in "$env:CUDA_PATH\bin", "$env:CUDA_PATH\bin\x64") {
+            foreach ($pattern in $dlls) { Get-ChildItem -Path $dir -Filter $pattern -ErrorAction SilentlyContinue | Copy-Item -Destination $stage }
+          }
+          if (-not (Get-ChildItem "$stage\cudart64_*.dll")) { throw "CUDA runtime DLL yok" }
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $redist = Get-ChildItem "$vs\VC\Redist\MSVC" -Directory | Sort-Object { try { [version]$_.Name } catch { [version]'0.0' } } -Descending | Select-Object -First 1
+          Get-ChildItem (Join-Path $redist.FullName 'x64\Microsoft.VC143.CRT\*.dll') | Where-Object { $_.Name -match '^(vcruntime140|msvcp140)' } | Copy-Item -Destination $stage
+          Copy-Item fdkaac.exe $stage
+          Copy-Item src\LICENSE "$stage\LICENSES\audio.cpp-LICENSE.txt"
+          Copy-Item fdk-aac-2.0.3\NOTICE "$stage\LICENSES\fdk-aac-NOTICE.txt"
+          Copy-Item fdkaac-1.0.6\COPYING "$stage\LICENSES\fdkaac-COPYING.txt"
+          Copy-Item patches\0001-voxcpm2-4gb-ve-hiz.patch "$stage\LICENSES\voxcpm2-patch-Apache-2.0.patch"
+          Get-ChildItem $stage | Format-Table Name, Length | Out-String | Write-Host
+
+      - name: Smoke (no GPU on runner)
+        shell: pwsh
+        run: |
+          & .\stage\audiocpp_cli.exe --list-devices
+          if ($LASTEXITCODE -ne 0) { throw "list-devices rc=$LASTEXITCODE" }
+          python -c "import wave; w = wave.open('s.wav', 'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(48000); w.writeframes(bytes(96000)); w.close()"
+          & .\stage\fdkaac.exe -p 5 -b 32000 -o s.m4a s.wav
+          if ($LASTEXITCODE -ne 0 -or (Get-Item s.m4a).Length -lt 100) { throw "fdkaac" }
+
+      - name: Zip + sha256
+        id: zip
+        shell: pwsh
+        run: |
+          $name = if ($env:GITHUB_REF_TYPE -eq 'tag') { "vakit-engines-windows-x64-cuda-$env:GITHUB_REF_NAME.zip" } else { "vakit-engines-windows-x64-cuda-dev.zip" }
+          Compress-Archive -Path stage\* -DestinationPath $name
+          $sha = (Get-FileHash -Algorithm SHA256 $name).Hash.ToLower()
+          "$sha  $name" | Out-File -Encoding ascii "$name.sha256"
+          "name=$name" >> $env:GITHUB_OUTPUT
+          Write-Host "$sha  $name  $((Get-Item $name).Length) bytes"
+
+      - uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: ${{ steps.zip.outputs.name }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vakit-engines-windows-x64-cuda
+          path: |
+            ${{ steps.zip.outputs.name }}
+            ${{ steps.zip.outputs.name }}.sha256
+
+      - name: Release (tag)
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create $env:GITHUB_REF_NAME "${{ steps.zip.outputs.name }}" "${{ steps.zip.outputs.name }}.sha256" --title $env:GITHUB_REF_NAME --notes "audio.cpp v0.7.2 + VoxCPM2 patch (CUDA 12.4, sm 75/86/89) + fdkaac 1.0.6 / fdk-aac 2.0.3"

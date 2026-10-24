@@ -1,0 +1,26 @@
+name: smoke
+
+# Çiftliğin Windows kurulumunu temiz bir Windows'ta uçtan uca dener (`install.ps1 -CheckOnly`): uv, Python,
+# imzalı paket, Windows kilidiyle worker ortamı, motor zip'i (indir + özet + aç), `audiocpp_cli --list-devices`,
+# fdkaac. Kayıt yapmaz, otomatik başlatma kurmaz, iş almaz; runner'da GPU yok (hata sayılmaz).
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "canary (yayına açılmamış yeni paket) | general"
+        default: canary
+        type: choice
+        options: [canary, general]
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - name: install.ps1 -CheckOnly (Windows PowerShell 5.1, gönüllüdeki gibi)
+        shell: powershell
+        env:
+          VAKIT_FARM_CHANNEL: ${{ inputs.channel }}
+        run: |
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          $script = Invoke-RestMethod -UseBasicParsing -UserAgent 'vakit-farm/1 (ci)' https://farm-vakit.hakancelik.dev/install.ps1
+          & ([scriptblock]::Create($script)) -CheckOnly
