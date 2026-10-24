@@ -1,0 +1,2 @@
+# Yama LF kalmalı: Windows runner checkout CRLF yaparsa `git apply` tutmaz.
+*.patch -text
