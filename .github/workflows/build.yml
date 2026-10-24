@@ -7,6 +7,7 @@ on:
   push:
     tags: ["v*"]
 
+# Üçüncü taraf action'lar commit SHA'sına sabit: yeniden etiketlenen action gönüllülerin çalıştırdığı ikiliye kod sokamasın.
 permissions:
   contents: write
   id-token: write
@@ -26,7 +27,7 @@ jobs:
   windows-cuda:
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Sources (sha-verified) + patch
         shell: pwsh
@@ -40,7 +41,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "patch" }
 
       - name: Install CUDA build tools
-        uses: Jimver/cuda-toolkit@v0.2.36
+        uses: Jimver/cuda-toolkit@b8bf9c6c28f8a92fbb04dcfcaee872e60c57462d # v0.2.36
         with:
           cuda: "12.4.1"
           method: local
@@ -62,7 +63,7 @@ jobs:
           cmake --build build --config Release -j %NUMBER_OF_PROCESSORS% --target audiocpp_cli
           if errorlevel 1 exit /b 1
 
-      - uses: msys2/setup-msys2@v2
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
         with:
           msystem: MINGW64
           update: false
@@ -132,11 +133,11 @@ jobs:
           "name=$name" >> $env:GITHUB_OUTPUT
           Write-Host "$sha  $name  $((Get-Item $name).Length) bytes"
 
-      - uses: actions/attest-build-provenance@v1
+      - uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018 # v1
         with:
           subject-path: ${{ steps.zip.outputs.name }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: vakit-engines-windows-x64-cuda
           path: |
