@@ -213,6 +213,9 @@ jobs:
           for lib in libcudart.so.12 libcublas.so.12 libcublasLt.so.12 libcufft.so.11; do
             cp -L "$CUDA_PATH/lib64/$lib" stage/ || cp -L "$(find "$CUDA_PATH" /usr/lib/x86_64-linux-gnu -name "$lib" | head -1)" stage/
           done
+          # nvcc'nin bağladığı libggml-cuda.so -static-libstdc++'ı almıyor, GLIBCXX_3.4.32 (GCC 13) istiyor: 22.04'ün
+          # libstdc++'ı (3.4.30) onu açamıyor, CUDA arka ucu sessizce düşüyordu. GCC 13'ün kitaplığı zip'te ($ORIGIN).
+          cp -L "$(g++-13 -print-file-name=libstdc++.so.6)" stage/
           cp fdkaac stage/
           cp src/LICENSE stage/LICENSES/audio.cpp-LICENSE.txt
           cp fdk-aac-2.0.3/NOTICE stage/LICENSES/fdk-aac-NOTICE.txt
@@ -226,6 +229,12 @@ jobs:
           # GPU'suz runner'da CUDA kitaplığı hiç yüklenmez: eksik bağımlılığı ldd'yle yakala (libcuda sürücüyle gelir).
           missing="$(LD_LIBRARY_PATH="$PWD/stage" ldd stage/audiocpp_cli stage/*.so* | grep 'not found' | grep -v 'libcuda.so.1' || true)"
           [ -z "$missing" ] || { echo "eksik kitaplık: $missing"; exit 1; }
+          # Runner'ın libstdc++'ı PPA'yla GCC 13'e yükseliyor (ldd bunu yakalamaz): her istenen GLIBCXX sürümü ya
+          # 22.04'ün kendi tabanında (≤ 3.4.30) ya da zip'teki libstdc++.so.6'da olmalı.
+          for v in $(objdump -T stage/audiocpp_cli stage/*.so* 2>/dev/null | grep -o 'GLIBCXX_[0-9.]*' | sort -uV); do
+            [ "$(printf '%s\nGLIBCXX_3.4.30\n' "$v" | sort -V | tail -1)" = GLIBCXX_3.4.30 ] && continue
+            grep -qa "$v" stage/libstdc++.so.6 || { echo "zip'teki libstdc++ $v sağlamıyor"; exit 1; }
+          done
           LD_LIBRARY_PATH="$PWD/stage" ./stage/audiocpp_cli --list-devices
           python3 -c "import wave; w = wave.open('s.wav', 'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(48000); w.writeframes(bytes(96000)); w.close()"
           ./stage/fdkaac -p 5 -b 32000 -o s.m4a s.wav && test "$(stat -c %s s.m4a)" -gt 100

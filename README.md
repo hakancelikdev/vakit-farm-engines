@@ -15,4 +15,5 @@ bundle manifest — a release here is not trusted on its own.
 This repository is generated from the farm's source (`tools/scripts/meal_audio/engines-repo/`); edit it there.
 
 Licenses: audio.cpp and the patch — Apache-2.0; fdk-aac — Fraunhofer FDK AAC license (`LICENSES/`); fdkaac —
-zlib-style; NVIDIA CUDA runtime DLLs — redistributed under the CUDA Toolkit EULA (redistributable components).
+zlib-style; NVIDIA CUDA runtime DLLs — redistributed under the CUDA Toolkit EULA (redistributable components); GCC 13 `libstdc++.so.6` (Linux) —
+GPL-3.0 with the GCC Runtime Library Exception.
