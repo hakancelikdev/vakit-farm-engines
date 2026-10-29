@@ -1,6 +1,7 @@
 name: build
 
-# audio.cpp v0.7.2 + yama (VoxCPM2, CUDA) ve fdkaac → platform başına tek zip (Windows, Linux). Yapılandırma
+# audio.cpp v0.7.2 + yama (VoxCPM2) ve fdkaac → platform × arka uç başına bir zip: `cuda` (CUDA + işlemci arka uçları)
+# ve `cpu` (kartsız makine, CUDA çalışma zamanı yok — ~800 MB yerine birkaç MB; Hakan 2026-10-30). Yapılandırma
 # upstream'in kendi release.yml windows-cuda işinden (test edilmiş yol): doğrudan CMake, OpenMP kapalı, CUDA backend
 # ayrı kitaplık + CUDA çalışma zamanı zip'te. Tag'de iki zip tek release'e.
 on:
@@ -25,8 +26,13 @@ env:
   CUDA_ARCHS: "75;86;89"
 
 jobs:
-  windows-cuda:
+  windows:
     runs-on: windows-2022
+    strategy:
+      matrix:
+        variant: [cuda, cpu]
+    env:
+      ENGINE_CUDA: ${{ matrix.variant == 'cuda' && 'ON' || 'OFF' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -42,6 +48,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "patch" }
 
       - name: Install CUDA build tools
+        if: matrix.variant == 'cuda'
         uses: Jimver/cuda-toolkit@b8bf9c6c28f8a92fbb04dcfcaee872e60c57462d # v0.2.36
         with:
           cuda: "12.4.1"
@@ -53,7 +60,7 @@ jobs:
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64 >nul
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release ^
-            -DENGINE_ENABLE_CUDA=ON -DENGINE_ENABLE_OPENMP=OFF -DGGML_OPENMP=OFF ^
+            -DENGINE_ENABLE_CUDA=%ENGINE_CUDA% -DENGINE_ENABLE_OPENMP=OFF -DGGML_OPENMP=OFF ^
             -DENGINE_ENABLE_CUDA_GRAPHS=ON -DENGINE_ENABLE_VULKAN=OFF -DENGINE_ENABLE_METAL=OFF ^
             -DENGINE_ENABLE_LLAMAFILE=ON -DENGINE_ENABLE_NATIVE_CPU=ON -DENGINE_BUILD_TESTS=OFF ^
             -DENGINE_ENABLE_CPU_ALL_VARIANTS=ON ^
@@ -99,11 +106,14 @@ jobs:
           $stage = "stage"
           New-Item -ItemType Directory -Force -Path $stage, "$stage\LICENSES" | Out-Null
           Copy-Item src\build\bin\audiocpp_cli.exe, src\build\bin\*.dll $stage
+          if ($env:ENGINE_CUDA -eq 'ON') {
           $dlls = "cudart64_*.dll", "cublas64_*.dll", "cublasLt64_*.dll", "cufft64_*.dll"
           foreach ($dir in "$env:CUDA_PATH\bin", "$env:CUDA_PATH\bin\x64") {
             foreach ($pattern in $dlls) { Get-ChildItem -Path $dir -Filter $pattern -ErrorAction SilentlyContinue | Copy-Item -Destination $stage }
           }
           if (-not (Get-ChildItem "$stage\cudart64_*.dll")) { throw "CUDA runtime DLL yok" }
+          }
+          if (-not (Get-ChildItem "$stage\ggml-cpu-*.dll")) { throw "işlemci arka ucu DLL yok" }
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
           $redist = Get-ChildItem "$vs\VC\Redist\MSVC" -Directory | Sort-Object { try { [version]$_.Name } catch { [version]'0.0' } } -Descending | Select-Object -First 1
           Get-ChildItem (Join-Path $redist.FullName 'x64\Microsoft.VC143.CRT\*.dll') | Where-Object { $_.Name -match '^(vcruntime140|msvcp140)' } | Copy-Item -Destination $stage
@@ -127,7 +137,7 @@ jobs:
         id: zip
         shell: pwsh
         run: |
-          $name = if ($env:GITHUB_REF_TYPE -eq 'tag') { "vakit-engines-windows-x64-cuda-$env:GITHUB_REF_NAME.zip" } else { "vakit-engines-windows-x64-cuda-dev.zip" }
+          $name = if ($env:GITHUB_REF_TYPE -eq 'tag') { "vakit-engines-windows-x64-${{ matrix.variant }}-$env:GITHUB_REF_NAME.zip" } else { "vakit-engines-windows-x64-${{ matrix.variant }}-dev.zip" }
           Compress-Archive -Path stage\* -DestinationPath $name
           $sha = (Get-FileHash -Algorithm SHA256 $name).Hash.ToLower()
           "$sha  $name" | Out-File -Encoding ascii "$name.sha256"
@@ -140,15 +150,20 @@ jobs:
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: vakit-engines-windows-x64-cuda
+          name: vakit-engines-windows-x64-${{ matrix.variant }}
           path: |
             ${{ steps.zip.outputs.name }}
             ${{ steps.zip.outputs.name }}.sha256
 
-  linux-cuda:
+  linux:
     # Ubuntu 22.04 (glibc 2.35): daha yeni dağıtımlarda da açılır. upstream GCC 13 istiyor → PPA'dan; libstdc++
     # statik bağlanır (22.04'ün kendi libstdc++'ı GCC 13 sembollerini taşımaz).
     runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        variant: [cuda, cpu]
+    env:
+      ENGINE_CUDA: ${{ matrix.variant == 'cuda' && 'ON' || 'OFF' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -167,6 +182,7 @@ jobs:
           sudo apt-get install -y -q gcc-13 g++-13 ninja-build autoconf automake libtool pkg-config zip
 
       - name: Install CUDA build tools
+        if: matrix.variant == 'cuda'
         uses: Jimver/cuda-toolkit@b8bf9c6c28f8a92fbb04dcfcaee872e60c57462d # v0.2.36
         with:
           cuda: "12.4.1"
@@ -179,7 +195,7 @@ jobs:
           set -euo pipefail
           cmake -S src -B src/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=gcc-13 -DCMAKE_CXX_COMPILER=g++-13 -DCMAKE_CUDA_HOST_COMPILER=g++-13 \
-            -DENGINE_ENABLE_CUDA=ON -DENGINE_ENABLE_OPENMP=OFF -DGGML_OPENMP=OFF \
+            -DENGINE_ENABLE_CUDA="$ENGINE_CUDA" -DENGINE_ENABLE_OPENMP=OFF -DGGML_OPENMP=OFF \
             -DENGINE_ENABLE_CUDA_GRAPHS=ON -DENGINE_ENABLE_VULKAN=OFF -DENGINE_ENABLE_METAL=OFF \
             -DENGINE_ENABLE_LLAMAFILE=ON -DENGINE_ENABLE_NATIVE_CPU=ON -DENGINE_BUILD_TESTS=OFF \
             -DENGINE_ENABLE_CPU_ALL_VARIANTS=ON "-DCMAKE_CUDA_ARCHITECTURES=$CUDA_ARCHS" \
@@ -210,9 +226,12 @@ jobs:
           mkdir -p stage/LICENSES
           cp -L src/build/bin/audiocpp_cli stage/
           find src/build -name '*.so*' -not -path '*/CMakeFiles/*' -exec cp -L {} stage/ \;
-          for lib in libcudart.so.12 libcublas.so.12 libcublasLt.so.12 libcufft.so.11; do
-            cp -L "$CUDA_PATH/lib64/$lib" stage/ || cp -L "$(find "$CUDA_PATH" /usr/lib/x86_64-linux-gnu -name "$lib" | head -1)" stage/
-          done
+          if [ "$ENGINE_CUDA" = ON ]; then
+            for lib in libcudart.so.12 libcublas.so.12 libcublasLt.so.12 libcufft.so.11; do
+              cp -L "$CUDA_PATH/lib64/$lib" stage/ || cp -L "$(find "$CUDA_PATH" /usr/lib/x86_64-linux-gnu -name "$lib" | head -1)" stage/
+            done
+          fi
+          ls stage/libggml-cpu-*.so >/dev/null || { echo "işlemci arka ucu .so yok"; exit 1; }
           # nvcc'nin bağladığı libggml-cuda.so -static-libstdc++'ı almıyor, GLIBCXX_3.4.32 (GCC 13) istiyor: 22.04'ün
           # libstdc++'ı (3.4.30) onu açamıyor, CUDA arka ucu sessizce düşüyordu. GCC 13'ün kitaplığı zip'te ($ORIGIN).
           cp -L "$(g++-13 -print-file-name=libstdc++.so.6)" stage/
@@ -243,7 +262,7 @@ jobs:
         id: zip
         run: |
           set -euo pipefail
-          if [ "$GITHUB_REF_TYPE" = tag ]; then name="vakit-engines-linux-x64-cuda-$GITHUB_REF_NAME.zip"; else name="vakit-engines-linux-x64-cuda-dev.zip"; fi
+          if [ "$GITHUB_REF_TYPE" = tag ]; then name="vakit-engines-linux-x64-${{ matrix.variant }}-$GITHUB_REF_NAME.zip"; else name="vakit-engines-linux-x64-${{ matrix.variant }}-dev.zip"; fi
           (cd stage && zip -qr "../$name" .)
           sha256sum "$name" > "$name.sha256"
           echo "name=$name" >> "$GITHUB_OUTPUT"
@@ -255,14 +274,14 @@ jobs:
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: vakit-engines-linux-x64-cuda
+          name: vakit-engines-linux-x64-${{ matrix.variant }}
           path: |
             ${{ steps.zip.outputs.name }}
             ${{ steps.zip.outputs.name }}.sha256
 
   release:
     if: github.ref_type == 'tag'
-    needs: [windows-cuda, linux-cuda]
+    needs: [windows, linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -274,4 +293,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" dist/* -R "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" \
-            --notes "audio.cpp v0.7.2 + VoxCPM2 patch (CUDA 12.4, sm 75/86/89) + fdkaac 1.0.6 / fdk-aac 2.0.3 — Windows x64 and Linux x64 (glibc 2.35+)"
+            --notes "audio.cpp v0.7.2 + VoxCPM2 patch (CUDA 12.4, sm 75/86/89) + fdkaac 1.0.6 / fdk-aac 2.0.3 — Windows x64 and Linux x64 (glibc 2.35+); -cpu zips carry no CUDA runtime"
