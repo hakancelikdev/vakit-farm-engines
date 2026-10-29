@@ -29,6 +29,7 @@ jobs:
   windows:
     runs-on: windows-2022
     strategy:
+      fail-fast: false  # bir varyantın hatası öbürünü iptal etmesin
       matrix:
         variant: [cuda, cpu]
     env:
@@ -160,6 +161,7 @@ jobs:
     # statik bağlanır (22.04'ün kendi libstdc++'ı GCC 13 sembollerini taşımaz).
     runs-on: ubuntu-22.04
     strategy:
+      fail-fast: false  # bir varyantın hatası öbürünü iptal etmesin
       matrix:
         variant: [cuda, cpu]
     env:
@@ -202,7 +204,7 @@ jobs:
             -DAUDIOCPP_MODEL_SET=custom -DAUDIOCPP_MODELS=voxcpm2 -DAUDIOCPP_DEPLOYMENT_BUILD=ON \
             "-DCMAKE_BUILD_RPATH=\$ORIGIN" "-DCMAKE_INSTALL_RPATH=\$ORIGIN" -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             "-DCMAKE_EXE_LINKER_FLAGS=-static-libstdc++ -static-libgcc" \
-            "-DCMAKE_SHARED_LINKER_FLAGS=-static-libstdc++ -static-libgcc" -DCUDAToolkit_ROOT="$CUDA_PATH"
+            "-DCMAKE_SHARED_LINKER_FLAGS=-static-libstdc++ -static-libgcc" -DCUDAToolkit_ROOT="${CUDA_PATH:-}"
           cmake --build src/build -j "$(nproc)" --target audiocpp_cli
 
       - name: fdk-aac + fdkaac (static, HE-AAC)
